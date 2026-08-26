@@ -1,19 +1,19 @@
-import json
-import os
-import time
-import urllib.error
-import urllib.request
-import gradio as gr
 import nltk
+import streamlit as st
+from transformers import pipeline
 
+# Download sentence tokenizer
 nltk.download("punkt", quiet=True)
 nltk.download("punkt_tab", quiet=True)
 
-MODEL_NAME = "sshleifer/distilbart-cnn-12-6"
-# Active 2026 Hugging Face Serverless Router Endpoint
-API_URL = (
-    f"https://router.huggingface.co/hf-inference/models/{MODEL_NAME}"
-)
+
+# Cache the model so it loads into memory only once
+@st.cache_resource
+def load_model():
+  return pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+
+
+summarizer = load_model()
 
 
 def clean_text(text: str) -> str:
@@ -29,103 +29,55 @@ def generate_extractive_baseline(text: str, num_sentences: int = 2) -> str:
   return " ".join(sentences[:num_sentences])
 
 
-def generate_abstractive_summary(
-    text: str, max_len: int = 120, min_len: int = 30
-) -> str:
-  cleaned_input = clean_text(text)
-  payload = {
-      "inputs": cleaned_input,
-      "parameters": {"max_length": int(max_len), "min_length": int(min_len)},
-  }
+st.set_page_config(page_title="Text Summarizer", page_icon="📝", layout="wide")
+st.title(" Text Summarization System")
+st.write(
+    "Paste text below to generate automated summaries using DistilBART and NLTK"
+    " baselines."
+)
 
-  headers = {"Content-Type": "application/json"}
+col1, col2 = st.columns(2)
 
-  # Add Bearer Token if configured in Render environment variables
-  hf_token = os.environ.get("HF_TOKEN")
-  if hf_token:
-    headers["Authorization"] = f"Bearer {hf_token}"
-
-  try:
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(API_URL, data=data, headers=headers)
-
-    with urllib.request.urlopen(req, timeout=30) as response:
-      res_body = response.read().decode("utf-8")
-      result = json.loads(res_body)
-
-      if isinstance(result, list) and len(result) > 0:
-        return result[0].get("summary_text", "")
-      elif isinstance(result, dict):
-        if "summary_text" in result:
-          return result["summary_text"]
-        if "error" in result:
-          return f"Inference API Error: {result['error']}"
-
-      return str(result)
-
-  except urllib.error.HTTPError as e:
-    error_body = e.read().decode("utf-8")
-    return f"HTTP Error {e.code}: {error_body}"
-  except Exception as e:
-    return f"Request Error: {str(e)}"
-
-
-def summarize_user_text(user_text: str, max_words: int):
-  if not user_text or not user_text.strip():
-    return (
-        "Please enter text to summarize.",
-        "Please enter text to summarize.",
-        "0 words",
-    )
-
-  max_len = int(max_words)
-  min_len = max(10, int(max_len * 0.3))
-
-  extractive_res = generate_extractive_baseline(user_text)
-  abstractive_res = generate_abstractive_summary(
-      user_text, max_len=max_len, min_len=min_len
+with col1:
+  user_text = st.text_area(
+      "Document Input", height=250, placeholder="Paste text here..."
   )
+  max_words = st.slider("Max Summary Length", 30, 250, 120, step=10)
+  submit_btn = st.button("Generate Summary", type="primary")
 
-  orig_word_count = len(user_text.split())
-  abs_word_count = len(abstractive_res.split())
-  stats = (
-      f"Original: {orig_word_count} words | Abstractive Summary:"
-      f" {abs_word_count} words"
-  )
+with col2:
+  if submit_btn:
+    if not user_text.strip():
+      st.warning("Please enter text to summarize.")
+    else:
+      with st.spinner("Generating summaries..."):
+        max_len = int(max_words)
+        min_len = max(10, int(max_len * 0.3))
+        cleaned_input = clean_text(user_text)
 
-  return extractive_res, abstractive_res, stats
+        # Extractive Summary
+        extractive_res = generate_extractive_baseline(user_text)
 
+        # Abstractive Summary
+        abs_res = summarizer(
+            cleaned_input,
+            max_length=max_len,
+            min_length=min_len,
+            do_sample=False,
+        )
+        abstractive_res = abs_res[0]["summary_text"]
 
-with gr.Blocks(title="Text Summarizer") as demo:
-  gr.Markdown("# 📝 Text Summarization System")
-  with gr.Row():
-    with gr.Column():
-      text_input = gr.Textbox(
-          lines=8, placeholder="Paste text here...", label="Document Input"
-      )
-      length_slider = gr.Slider(
-          minimum=30, maximum=250, value=120, step=10, label="Max Summary Length"
-      )
-      submit_btn = gr.Button("Generate Summary", variant="primary")
-    with gr.Column():
-      abstractive_output = gr.Textbox(
-          lines=4, label="Abstractive BART Summary"
-      )
-      extractive_output = gr.Textbox(
-          lines=4, label="Extractive Baseline Summary"
-      )
-      stats_output = gr.Textbox(label="Metrics")
+        # Metrics
+        orig_count = len(user_text.split())
+        abs_count = len(abstractive_res.split())
 
-  submit_btn.click(
-      fn=summarize_user_text,
-      inputs=[text_input, length_slider],
-      outputs=[extractive_output, abstractive_output, stats_output],
-  )
-
-if __name__ == "__main__":
-  port = int(os.environ.get("PORT", 10000))
-  print(f"[*] Starting Gradio server on port {port}...")
-  demo.launch(server_name="0.0.0.0", server_port=port, prevent_thread_lock=True)
-
-  while True:
-    time.sleep(3600)
+        st.text_area(
+            "Abstractive BART Summary", value=abstractive_res, height=120
+        )
+        st.text_area(
+            "Extractive Baseline Summary", value=extractive_res, height=120
+        )
+        st.info(
+            f"Original: {orig_count} words | Abstractive Summary: {abs_count}"
+            " words"
+        )
