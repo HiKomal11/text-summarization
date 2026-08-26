@@ -1,9 +1,8 @@
-import json
 import os
-import urllib.error
-import urllib.request
 import nltk
 import streamlit as st
+from huggingface_hub import InferenceClient
+from rouge_score import rouge_scorer
 
 # Download NLTK tokenizer resources safely
 try:
@@ -12,7 +11,6 @@ except LookupError:
   nltk.download("punkt", quiet=True)
 
 MODEL_NAME = "sshleifer/distilbart-cnn-12-6"
-API_URL = f"https://router.huggingface.co/hf-inference/models/{MODEL_NAME}"
 
 
 def clean_text(text: str) -> str:
@@ -35,60 +33,62 @@ def generate_abstractive_summary(
     text: str, max_len: int = 120, min_len: int = 30
 ) -> str:
   cleaned_input = clean_text(text)
-  payload = {
-      "inputs": cleaned_input,
-      "parameters": {"max_length": int(max_len), "min_length": int(min_len)},
-  }
 
-  headers = {"Content-Type": "application/json"}
+  hf_token = st.secrets.get("HF_TOKEN") or os.environ.get("HF_TOKEN")
 
-  # Retrieve token from Streamlit Secrets or local environment variables
-  hf_token = None
-  if "HF_TOKEN" in st.secrets:
-    hf_token = st.secrets["HF_TOKEN"]
-  elif os.environ.get("HF_TOKEN"):
-    hf_token = os.environ.get("HF_TOKEN")
-
-  if hf_token:
-    headers["Authorization"] = f"Bearer {hf_token}"
+  if not hf_token:
+    return "API Config Error: HF_TOKEN secret not found in Streamlit Cloud."
 
   try:
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(API_URL, data=data, headers=headers)
+    client = InferenceClient(token=hf_token.strip())
 
-    with urllib.request.urlopen(req, timeout=30) as response:
-      res_body = response.read().decode("utf-8")
-      result = json.loads(res_body)
+    summary = client.summarization(
+        cleaned_input,
+        model=MODEL_NAME,
+        parameters={"max_length": int(max_len), "min_length": int(min_len)},
+    )
 
-      if isinstance(result, list) and len(result) > 0:
-        return result[0].get("summary_text", "")
-      elif isinstance(result, dict):
-        if "summary_text" in result:
-          return result["summary_text"]
-        if "error" in result:
-          return f"API Note: {result['error']}"
+    if isinstance(summary, dict) and "summary_text" in summary:
+      return summary["summary_text"]
+    elif hasattr(summary, "summary_text"):
+      return summary.summary_text
+    elif isinstance(summary, str):
+      return summary
 
-      return str(result)
-  except urllib.error.HTTPError as e:
-    if e.code == 401:
-      return (
-          "API Error 401 (Unauthorized): Please add your HF_TOKEN into Streamlit"
-          " Secrets or environment variables."
-      )
-    return f"API Status {e.code}: Request failed or model is loading."
+    return str(summary)
+
   except Exception as e:
-    return f"Request Error: {str(e)}"
+    err_msg = str(e)
+    if "403" in err_msg or "Forbidden" in err_msg:
+      return (
+          "API 403 (Forbidden): Ensure your Hugging Face fine-grained token has"
+          " 'Make calls to Inference Providers' permission enabled."
+      )
+    return f"Inference Error: {err_msg}"
 
 
-# Streamlit UI Configuration
+def compute_rouge_scores(target: str, prediction: str):
+  """Computes ROUGE-1, ROUGE-2, and ROUGE-L F1 scores."""
+  scorer = rouge_scorer.RougeScorer(
+      ["rouge1", "rouge2", "rougeL"], use_stemmer=True
+  )
+  scores = scorer.score(target, prediction)
+  return {
+      "rouge1": round(scores["rouge1"].fmeasure * 100, 2),
+      "rouge2": round(scores["rouge2"].fmeasure * 100, 2),
+      "rougeL": round(scores["rougeL"].fmeasure * 100, 2),
+  }
+
+
+# --- Streamlit UI ---
 st.set_page_config(
-    page_title="Text Summarization System", page_icon="📝", layout="wide"
+    page_title="Text Summarization System", page_icon="", layout="wide"
 )
 
-st.title(" Text Summarization System")
+st.title(" Text Summarization & Evaluation System")
 st.caption(
-    "Compare extractive baseline summaries against abstractive DistilBART API"
-    " generation."
+    "Compare extractive baseline and abstractive DistilBART summaries using"
+    " ROUGE metrics."
 )
 
 col1, col2 = st.columns(2)
@@ -111,7 +111,7 @@ with col2:
     if not user_text.strip():
       st.warning("Please enter text to summarize.")
     else:
-      with st.spinner("Processing summaries..."):
+      with st.spinner("Processing summaries & computing metrics..."):
         max_len = int(max_words)
         min_len = max(10, int(max_len * 0.3))
 
@@ -120,24 +120,22 @@ with col2:
             user_text, max_len=max_len, min_len=min_len
         )
 
+        is_error = abstractive_res.startswith(
+            "API"
+        ) or abstractive_res.startswith("Inference Error")
+
         orig_count = len(user_text.split())
-        abs_count = (
-            len(abstractive_res.split())
-            if not abstractive_res.startswith("API Error")
-            else 0
-        )
+        abs_count = len(abstractive_res.split()) if not is_error else 0
         ext_count = len(extractive_res.split())
 
         st.subheader("Abstractive BART Summary")
-        if abstractive_res.startswith("API Error") or abstractive_res.startswith(
-            "API Status"
-        ):
+        if is_error:
           st.error(abstractive_res)
         else:
           st.text_area(
               "Abstractive Result",
               value=abstractive_res,
-              height=120,
+              height=110,
               label_visibility="collapsed",
           )
 
@@ -145,12 +143,41 @@ with col2:
         st.text_area(
             "Extractive Result",
             value=extractive_res,
-            height=120,
+            height=110,
             label_visibility="collapsed",
         )
 
         st.divider()
+
+        # Word Count Metrics
         m1, m2, m3 = st.columns(3)
         m1.metric("Original Length", f"{orig_count} words")
         m2.metric("Abstractive Length", f"{abs_count} words")
         m3.metric("Extractive Length", f"{ext_count} words")
+
+        # ROUGE Quantitative Evaluation
+        if not is_error and extractive_res:
+          st.subheader(" ROUGE Evaluation (BART vs. Baseline)")
+          st.caption(
+              "Measures n-gram overlap F1 score of the abstractive summary"
+              " against the extractive reference baseline."
+          )
+
+          rouge_results = compute_rouge_scores(extractive_res, abstractive_res)
+
+          r1, r2, rL = st.columns(3)
+          r1.metric(
+              "ROUGE-1 (Unigram)",
+              f"{rouge_results['rouge1']}%",
+              help="Overlap of individual words.",
+          )
+          r2.metric(
+              "ROUGE-2 (Bigram)",
+              f"{rouge_results['rouge2']}%",
+              help="Overlap of word pairs (phrases).",
+          )
+          rL.metric(
+              "ROUGE-L (LCS)",
+              f"{rouge_results['rougeL']}%",
+              help="Longest Common Subsequence matching.",
+          )
