@@ -12,9 +12,7 @@ except LookupError:
   nltk.download("punkt", quiet=True)
 
 MODEL_NAME = "sshleifer/distilbart-cnn-12-6"
-API_URL = (
-    f"https://router.huggingface.co/hf-inference/models/{MODEL_NAME}"
-)
+API_URL = f"https://router.huggingface.co/hf-inference/models/{MODEL_NAME}"
 
 
 def clean_text(text: str) -> str:
@@ -43,7 +41,14 @@ def generate_abstractive_summary(
   }
 
   headers = {"Content-Type": "application/json"}
-  hf_token = os.environ.get("HF_TOKEN")
+
+  # Retrieve token from Streamlit Secrets or local environment variables
+  hf_token = None
+  if "HF_TOKEN" in st.secrets:
+    hf_token = st.secrets["HF_TOKEN"]
+  elif os.environ.get("HF_TOKEN"):
+    hf_token = os.environ.get("HF_TOKEN")
+
   if hf_token:
     headers["Authorization"] = f"Bearer {hf_token}"
 
@@ -65,29 +70,40 @@ def generate_abstractive_summary(
 
       return str(result)
   except urllib.error.HTTPError as e:
-    return (
-        f"API Status {e.code}: Token required for Serverless Router or model"
-        " loading."
-    )
+    if e.code == 401:
+      return (
+          "API Error 401 (Unauthorized): Please add your HF_TOKEN into Streamlit"
+          " Secrets or environment variables."
+      )
+    return f"API Status {e.code}: Request failed or model is loading."
   except Exception as e:
     return f"Request Error: {str(e)}"
 
 
-# Streamlit UI
-st.set_page_config(page_title="Text Summarizer", page_icon="📝", layout="wide")
-st.title("Text Summarization System")
-st.write(
-    "Paste text below to generate automated summaries using DistilBART and NLTK"
-    " baselines."
+# Streamlit UI Configuration
+st.set_page_config(
+    page_title="Text Summarization System", page_icon="📝", layout="wide"
+)
+
+st.title(" Text Summarization System")
+st.caption(
+    "Compare extractive baseline summaries against abstractive DistilBART API"
+    " generation."
 )
 
 col1, col2 = st.columns(2)
 
 with col1:
   user_text = st.text_area(
-      "Document Input", height=250, placeholder="Paste text here..."
+      "Document Input", height=250, placeholder="Paste text here to summarize..."
   )
-  max_words = st.slider("Max Summary Length", 30, 250, 120, step=10)
+  max_words = st.slider(
+      "Max Summary Length (Words)",
+      min_value=30,
+      max_value=250,
+      value=120,
+      step=10,
+  )
   submit_btn = st.button("Generate Summary", type="primary")
 
 with col2:
@@ -95,7 +111,7 @@ with col2:
     if not user_text.strip():
       st.warning("Please enter text to summarize.")
     else:
-      with st.spinner("Generating summaries..."):
+      with st.spinner("Processing summaries..."):
         max_len = int(max_words)
         min_len = max(10, int(max_len * 0.3))
 
@@ -105,15 +121,36 @@ with col2:
         )
 
         orig_count = len(user_text.split())
-        abs_count = len(abstractive_res.split())
+        abs_count = (
+            len(abstractive_res.split())
+            if not abstractive_res.startswith("API Error")
+            else 0
+        )
+        ext_count = len(extractive_res.split())
 
+        st.subheader("Abstractive BART Summary")
+        if abstractive_res.startswith("API Error") or abstractive_res.startswith(
+            "API Status"
+        ):
+          st.error(abstractive_res)
+        else:
+          st.text_area(
+              "Abstractive Result",
+              value=abstractive_res,
+              height=120,
+              label_visibility="collapsed",
+          )
+
+        st.subheader("Extractive Baseline Summary")
         st.text_area(
-            "Abstractive BART Summary", value=abstractive_res, height=120
+            "Extractive Result",
+            value=extractive_res,
+            height=120,
+            label_visibility="collapsed",
         )
-        st.text_area(
-            "Extractive Baseline Summary", value=extractive_res, height=120
-        )
-        st.info(
-            f"Original: {orig_count} words | Abstractive Summary: {abs_count}"
-            " words"
-        )
+
+        st.divider()
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Original Length", f"{orig_count} words")
+        m2.metric("Abstractive Length", f"{abs_count} words")
+        m3.metric("Extractive Length", f"{ext_count} words")
