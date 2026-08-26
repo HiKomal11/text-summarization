@@ -42,10 +42,12 @@ def generate_abstractive_summary(
   try:
     client = InferenceClient(token=hf_token.strip())
 
+    # Pass max_length and min_length directly as keyword arguments
     summary = client.summarization(
         cleaned_input,
         model=MODEL_NAME,
-        parameters={"max_length": int(max_len), "min_length": int(min_len)},
+        max_length=int(max_len),
+        min_length=int(min_len),
     )
 
     if isinstance(summary, dict) and "summary_text" in summary:
