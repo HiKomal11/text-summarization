@@ -12,7 +12,6 @@ except LookupError:
     nltk.download("punkt", quiet=True)
 
 MODEL_NAME = "sshleifer/distilbart-cnn-12-6"
-# Updated to the new Hugging Face router endpoint
 API_URL = f"https://router.huggingface.co/models/{MODEL_NAME}"
 
 
@@ -64,6 +63,16 @@ def generate_abstractive_summary(
 
     try:
         response = session.post(API_URL, headers=headers, json=payload, timeout=30)
+
+        # Guard: Check if server returned an empty body
+        if not response.text or not response.text.strip():
+            return f"Inference Error ({response.status_code}): Received empty response from Hugging Face server."
+
+        # Guard: Check if server returned HTML (e.g. Cloudflare gateway error page) instead of JSON
+        content_type = response.headers.get("content-type", "")
+        if "text/html" in content_type:
+            return f"Inference Error ({response.status_code}): Gateway timeout or server maintenance page returned."
+
         result = response.json()
 
         if response.status_code == 200:
@@ -95,10 +104,10 @@ def generate_abstractive_summary(
 
 # --- Streamlit Layout ---
 st.set_page_config(
-    page_title="Text Summarization System", page_icon="", layout="wide"
+    page_title="Text Summarization System", page_icon="📝", layout="wide"
 )
 
-st.title(" Text Summarization System")
+st.title("📝 Text Summarization System")
 st.caption(
     "Compare extractive baseline summaries against abstractive DistilBART API"
     " generation."
