@@ -2,6 +2,8 @@ import os
 import nltk
 import requests
 import streamlit as st
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Initialize tokenizer safely
 try:
@@ -10,7 +12,8 @@ except LookupError:
     nltk.download("punkt", quiet=True)
 
 MODEL_NAME = "sshleifer/distilbart-cnn-12-6"
-API_URL = f"https://api-inference.huggingface.co/models/{MODEL_NAME}"
+# Updated to the new Hugging Face router endpoint
+API_URL = f"https://router.huggingface.co/models/{MODEL_NAME}"
 
 
 def clean_text(text: str) -> str:
@@ -49,8 +52,18 @@ def generate_abstractive_summary(
         },
     }
 
+    # Setup session with retry logic for network stability
+    session = requests.Session()
+    retries = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[500, 502, 503, 504],
+        raise_on_status=False,
+    )
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+
     try:
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+        response = session.post(API_URL, headers=headers, json=payload, timeout=30)
         result = response.json()
 
         if response.status_code == 200:
@@ -67,9 +80,15 @@ def generate_abstractive_summary(
         elif response.status_code == 503:
             return "API Note: Model is currently loading on Hugging Face. Please try again in a few seconds."
         else:
-            error_msg = result.get("error", str(result)) if isinstance(result, dict) else str(result)
+            error_msg = (
+                result.get("error", str(result))
+                if isinstance(result, dict)
+                else str(result)
+            )
             return f"Inference Error ({response.status_code}): {error_msg}"
 
+    except requests.exceptions.ConnectionError:
+        return "Network Error: Could not reach Hugging Face servers. Please check your internet connection or active VPN/proxy settings."
     except Exception as e:
         return f"Inference Error: {str(e)}"
 
@@ -119,13 +138,16 @@ with col2:
                     len(abstractive_res.split())
                     if not abstractive_res.startswith("API")
                     and not abstractive_res.startswith("Inference Error")
+                    and not abstractive_res.startswith("Network Error")
                     else 0
                 )
                 ext_count = len(extractive_res.split())
 
                 st.subheader("Abstractive BART Summary")
-                if abstractive_res.startswith("API") or abstractive_res.startswith(
-                    "Inference Error"
+                if (
+                    abstractive_res.startswith("API")
+                    or abstractive_res.startswith("Inference Error")
+                    or abstractive_res.startswith("Network Error")
                 ):
                     st.error(abstractive_res)
                 else:
