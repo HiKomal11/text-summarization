@@ -1,19 +1,22 @@
 import nltk
 import streamlit as st
-from transformers import pipeline
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
 
-# Download sentence tokenizer
+# Download NLTK sentence tokenizers quietly
 nltk.download("punkt", quiet=True)
 nltk.download("punkt_tab", quiet=True)
 
 
-# Cache the model so it loads into memory only once
+# Cache model and tokenizer initialization to save RAM and build time
 @st.cache_resource
-def load_model():
-  return pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+def load_summarization_pipeline():
+  model_name = "sshleifer/distilbart-cnn-12-6"
+  tokenizer = AutoTokenizer.from_pretrained(model_name)
+  model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+  return pipeline("summarization", model=model, tokenizer=tokenizer)
 
 
-summarizer = load_model()
+summarizer = load_summarization_pipeline()
 
 
 def clean_text(text: str) -> str:
@@ -29,6 +32,7 @@ def generate_extractive_baseline(text: str, num_sentences: int = 2) -> str:
   return " ".join(sentences[:num_sentences])
 
 
+# Page Setup
 st.set_page_config(page_title="Text Summarizer", page_icon="📝", layout="wide")
 st.title(" Text Summarization System")
 st.write(
@@ -55,10 +59,10 @@ with col2:
         min_len = max(10, int(max_len * 0.3))
         cleaned_input = clean_text(user_text)
 
-        # Extractive Summary
+        # Extractive Baseline Summary
         extractive_res = generate_extractive_baseline(user_text)
 
-        # Abstractive Summary
+        # Abstractive BART Summary
         abs_res = summarizer(
             cleaned_input,
             max_length=max_len,
@@ -67,7 +71,7 @@ with col2:
         )
         abstractive_res = abs_res[0]["summary_text"]
 
-        # Metrics
+        # Word Count Metrics
         orig_count = len(user_text.split())
         abs_count = len(abstractive_res.split())
 
