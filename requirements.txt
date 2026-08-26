@@ -1,6 +1,4 @@
-torch
-transformers
-nltk
-evaluate
-pandas
+
+huggingface_hub
 gradio
+nltk
