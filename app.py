@@ -1,16 +1,16 @@
-import json
 import os
 import time
 import gradio as gr
 import nltk
-from huggingface_hub import InferenceClient
+import requests
 
 nltk.download("punkt", quiet=True)
 nltk.download("punkt_tab", quiet=True)
 
-# Free Hugging Face Serverless API client
-client = InferenceClient()
 MODEL_NAME = "sshleifer/distilbart-cnn-12-6"
+API_URL = f"https://api-inference.huggingface.co/models/{MODEL_NAME}"
+# Optionally pass your HF token: {"Authorization": f"Bearer {os.environ.get('HF_TOKEN')}"}
+HEADERS = {}
 
 
 def clean_text(text: str) -> str:
@@ -30,14 +30,14 @@ def generate_abstractive_summary(
     text: str, max_len: int = 120, min_len: int = 30
 ) -> str:
   cleaned_input = clean_text(text)
+  payload = {
+      "inputs": cleaned_input,
+      "parameters": {"max_length": int(max_len), "min_length": int(min_len)},
+  }
+
   try:
-    # Use client.post to pass generation parameters cleanly to HF Inference API
-    payload = {
-        "inputs": cleaned_input,
-        "parameters": {"max_length": int(max_len), "min_length": int(min_len)},
-    }
-    response_bytes = client.post(json=payload, model=MODEL_NAME)
-    data = json.loads(response_bytes.decode("utf-8"))
+    response = requests.post(API_URL, headers=HEADERS, json=payload, timeout=30)
+    data = response.json()
 
     if isinstance(data, list) and len(data) > 0:
       return data[0].get("summary_text", "")
@@ -49,7 +49,7 @@ def generate_abstractive_summary(
 
     return str(data)
   except Exception as e:
-    return f"Inference API Error: {str(e)}"
+    return f"Request Error: {str(e)}"
 
 
 def summarize_user_text(user_text: str, max_words: int):
