@@ -5,67 +5,69 @@ from huggingface_hub import InferenceClient
 
 # Initialize tokenizer safely
 try:
-  nltk.data.find("tokenizers/punkt")
+    nltk.data.find("tokenizers/punkt")
 except LookupError:
-  nltk.download("punkt", quiet=True)
+    nltk.download("punkt", quiet=True)
 
 MODEL_NAME = "sshleifer/distilbart-cnn-12-6"
 
 
 def clean_text(text: str) -> str:
-  text = text.replace("\n", " ")
-  return " ".join(text.split()).strip()
+    text = text.replace("\n", " ")
+    return " ".join(text.split()).strip()
 
 
 def generate_extractive_baseline(text: str, num_sentences: int = 2) -> str:
-  cleaned = clean_text(text)
-  try:
-    sentences = nltk.sent_tokenize(cleaned)
-  except Exception:
-    sentences = cleaned.split(". ")
-  if not sentences:
-    return ""
-  return " ".join(sentences[:num_sentences])
+    cleaned = clean_text(text)
+    try:
+        sentences = nltk.sent_tokenize(cleaned)
+    except Exception:
+        sentences = cleaned.split(". ")
+    if not sentences:
+        return ""
+    return " ".join(sentences[:num_sentences])
 
 
 def generate_abstractive_summary(
     text: str, max_len: int = 120, min_len: int = 30
 ) -> str:
-  cleaned_input = clean_text(text)
+    cleaned_input = clean_text(text)
 
-  # Retrieve token from secrets or environment
-  hf_token = st.secrets.get("HF_TOKEN") or os.environ.get("HF_TOKEN")
+    # Retrieve token from secrets or environment
+    hf_token = st.secrets.get("HF_TOKEN") or os.environ.get("HF_TOKEN")
 
-  if not hf_token:
-    return "API Config Error: HF_TOKEN secret not found in Streamlit Cloud."
+    if not hf_token:
+        return "API Config Error: HF_TOKEN secret not found in Streamlit Cloud."
 
-  try:
-    # Initialize the client with explicit token
-    client = InferenceClient(token=hf_token.strip())
+    try:
+        # Initialize the client with explicit token
+        client = InferenceClient(token=hf_token.strip())
 
-    summary = client.summarization(
-        cleaned_input,
-        model=MODEL_NAME,
-        parameters={"max_length": int(max_len), "min_length": int(min_len)},
-    )
+        # Passed as direct arguments instead of inside a `parameters` dictionary
+        summary = client.summarization(
+            cleaned_input,
+            model=MODEL_NAME,
+            max_length=int(max_len),
+            min_length=int(min_len),
+        )
 
-    if isinstance(summary, dict) and "summary_text" in summary:
-      return summary["summary_text"]
-    elif hasattr(summary, "summary_text"):
-      return summary.summary_text
-    elif isinstance(summary, str):
-      return summary
+        if hasattr(summary, "summary_text"):
+            return summary.summary_text
+        elif isinstance(summary, dict) and "summary_text" in summary:
+            return summary["summary_text"]
+        elif isinstance(summary, str):
+            return summary
 
-    return str(summary)
+        return str(summary)
 
-  except Exception as e:
-    err_msg = str(e)
-    if "403" in err_msg or "Forbidden" in err_msg:
-      return (
-          "API 403 (Forbidden): Ensure your Hugging Face fine-grained token has"
-          " 'Make calls to Inference Providers' permission enabled."
-      )
-    return f"Inference Error: {err_msg}"
+    except Exception as e:
+        err_msg = str(e)
+        if "403" in err_msg or "Forbidden" in err_msg:
+            return (
+                "API 403 (Forbidden): Ensure your Hugging Face fine-grained token has"
+                " 'Make calls to Inference Providers' permission enabled."
+            )
+        return f"Inference Error: {err_msg}"
 
 
 # --- Streamlit Layout ---
@@ -82,64 +84,64 @@ st.caption(
 col1, col2 = st.columns(2)
 
 with col1:
-  user_text = st.text_area(
-      "Document Input", height=250, placeholder="Paste text here to summarize..."
-  )
-  max_words = st.slider(
-      "Max Summary Length (Words)",
-      min_value=30,
-      max_value=250,
-      value=120,
-      step=10,
-  )
-  submit_btn = st.button("Generate Summary", type="primary")
+    user_text = st.text_area(
+        "Document Input", height=250, placeholder="Paste text here to summarize..."
+    )
+    max_words = st.slider(
+        "Max Summary Length (Words)",
+        min_value=30,
+        max_value=250,
+        value=120,
+        step=10,
+    )
+    submit_btn = st.button("Generate Summary", type="primary")
 
 with col2:
-  if submit_btn:
-    if not user_text.strip():
-      st.warning("Please enter text to summarize.")
-    else:
-      with st.spinner("Processing summaries..."):
-        max_len = int(max_words)
-        min_len = max(10, int(max_len * 0.3))
-
-        extractive_res = generate_extractive_baseline(user_text)
-        abstractive_res = generate_abstractive_summary(
-            user_text, max_len=max_len, min_len=min_len
-        )
-
-        orig_count = len(user_text.split())
-        abs_count = (
-            len(abstractive_res.split())
-            if not abstractive_res.startswith("API")
-            and not abstractive_res.startswith("Inference Error")
-            else 0
-        )
-        ext_count = len(extractive_res.split())
-
-        st.subheader("Abstractive BART Summary")
-        if abstractive_res.startswith("API") or abstractive_res.startswith(
-            "Inference Error"
-        ):
-          st.error(abstractive_res)
+    if submit_btn:
+        if not user_text.strip():
+            st.warning("Please enter text to summarize.")
         else:
-          st.text_area(
-              "Abstractive Result",
-              value=abstractive_res,
-              height=120,
-              label_visibility="collapsed",
-          )
+            with st.spinner("Processing summaries..."):
+                max_len = int(max_words)
+                min_len = max(10, int(max_len * 0.3))
 
-        st.subheader("Extractive Baseline Summary")
-        st.text_area(
-            "Extractive Result",
-            value=extractive_res,
-            height=120,
-            label_visibility="collapsed",
-        )
+                extractive_res = generate_extractive_baseline(user_text)
+                abstractive_res = generate_abstractive_summary(
+                    user_text, max_len=max_len, min_len=min_len
+                )
 
-        st.divider()
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Original Length", f"{orig_count} words")
-        m2.metric("Abstractive Length", f"{abs_count} words")
-        m3.metric("Extractive Length", f"{ext_count} words")
+                orig_count = len(user_text.split())
+                abs_count = (
+                    len(abstractive_res.split())
+                    if not abstractive_res.startswith("API")
+                    and not abstractive_res.startswith("Inference Error")
+                    else 0
+                )
+                ext_count = len(extractive_res.split())
+
+                st.subheader("Abstractive BART Summary")
+                if abstractive_res.startswith("API") or abstractive_res.startswith(
+                    "Inference Error"
+                ):
+                    st.error(abstractive_res)
+                else:
+                    st.text_area(
+                        "Abstractive Result",
+                        value=abstractive_res,
+                        height=120,
+                        label_visibility="collapsed",
+                    )
+
+                st.subheader("Extractive Baseline Summary")
+                st.text_area(
+                    "Extractive Result",
+                    value=extractive_res,
+                    height=120,
+                    label_visibility="collapsed",
+                )
+
+                st.divider()
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Original Length", f"{orig_count} words")
+                m2.metric("Abstractive Length", f"{abs_count} words")
+                m3.metric("Extractive Length", f"{ext_count} words")
