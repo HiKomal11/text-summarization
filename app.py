@@ -1,7 +1,9 @@
 import os
 import nltk
+import requests
 import streamlit as st
-from huggingface_hub import InferenceClient
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Initialize tokenizer safely
 try:
@@ -10,6 +12,7 @@ except LookupError:
     nltk.download("punkt", quiet=True)
 
 MODEL_NAME = "sshleifer/distilbart-cnn-12-6"
+API_URL = f"https://router.huggingface.co/models/{MODEL_NAME}"
 
 
 def clean_text(text: str) -> str:
@@ -39,34 +42,61 @@ def generate_abstractive_summary(
     if not hf_token:
         return "API Config Error: HF_TOKEN secret not found in Streamlit Cloud."
 
+    headers = {"Authorization": f"Bearer {hf_token.strip()}"}
+    payload = {
+        "inputs": cleaned_input,
+        "parameters": {
+            "max_length": int(max_len),
+            "min_length": int(min_len),
+        },
+    }
+
+    # Setup session with retry logic for network stability
+    session = requests.Session()
+    retries = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[500, 502, 503, 504],
+        raise_on_status=False,
+    )
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+
     try:
-        client = InferenceClient(token=hf_token.strip())
+        response = session.post(API_URL, headers=headers, json=payload, timeout=30)
 
-        # Use text_generation which is universally supported by the router inference gateway
-        prompt = f"Summarize the following text concisely:\n\n{cleaned_input}"
-        
-        response = client.text_generation(
-            prompt,
-            model=MODEL_NAME,
-            max_new_tokens=int(max_len),
-            details=False,
-        )
+        if not response.text or not response.text.strip():
+            return f"Inference Error ({response.status_code}): Received empty response from Hugging Face server."
 
-        if response:
-            return response.strip()
-        
-        return "Inference Error: Received empty generation response."
+        if "text/html" in response.headers.get("content-type", ""):
+            return f"Inference Error ({response.status_code}): Gateway timeout or server maintenance page returned."
 
-    except Exception as e:
-        err_msg = str(e)
-        if "403" in err_msg or "Forbidden" in err_msg:
+        result = response.json()
+
+        if response.status_code == 200:
+            if isinstance(result, list) and len(result) > 0:
+                return result[0].get("summary_text", "")
+            elif isinstance(result, dict) and "summary_text" in result:
+                return result["summary_text"]
+            return str(result)
+        elif response.status_code == 403:
             return (
                 "API 403 (Forbidden): Ensure your Hugging Face fine-grained token has"
                 " 'Make calls to Inference Providers' permission enabled."
             )
-        elif "503" in err_msg:
+        elif response.status_code == 503:
             return "API Note: Model is currently loading on Hugging Face. Please try again in a few seconds."
-        return f"Inference Error: {err_msg}"
+        else:
+            error_msg = (
+                result.get("error", str(result))
+                if isinstance(result, dict)
+                else str(result)
+            )
+            return f"Inference Error ({response.status_code}): {error_msg}"
+
+    except requests.exceptions.ConnectionError:
+        return "Network Error: Could not reach Hugging Face servers. Please check your internet connection."
+    except Exception as e:
+        return f"Inference Error: {str(e)}"
 
 
 # --- Streamlit Layout ---
@@ -114,13 +144,16 @@ with col2:
                     len(abstractive_res.split())
                     if not abstractive_res.startswith("API")
                     and not abstractive_res.startswith("Inference Error")
+                    and not abstractive_res.startswith("Network Error")
                     else 0
                 )
                 ext_count = len(extractive_res.split())
 
                 st.subheader("Abstractive BART Summary")
-                if abstractive_res.startswith("API") or abstractive_res.startswith(
-                    "Inference Error"
+                if (
+                    abstractive_res.startswith("API")
+                    or abstractive_res.startswith("Inference Error")
+                    or abstractive_res.startswith("Network Error")
                 ):
                     st.error(abstractive_res)
                 else:
