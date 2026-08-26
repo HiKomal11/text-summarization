@@ -9,8 +9,8 @@ try:
 except LookupError:
     nltk.download("punkt", quiet=True)
 
-# Updated to a model fully supported on the HF Inference provider network
-MODEL_NAME = "facebook/bart-large-cnn"
+# Using a modern, reliably supported serverless chat model via Hugging Face router
+MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
 
 
 def clean_text(text: str) -> str:
@@ -41,24 +41,31 @@ def generate_abstractive_summary(
         return "API Config Error: HF_TOKEN secret not found in Streamlit Cloud."
 
     try:
-        # Use the official InferenceClient with the explicit hf-inference provider stack
-        client = InferenceClient(provider="hf-inference", api_key=hf_token.strip())
+        client = InferenceClient(token=hf_token.strip())
 
-        response = client.summarization(
-            text=cleaned_input,
+        # Use chat completion which is fully supported and stable on the new router backend
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a professional summarization assistant. Provide a clear, "
+                    f"concise abstractive summary of the given text within a limit of {max_len} words."
+                ),
+            },
+            {"role": "user", "content": cleaned_input},
+        ]
+
+        response = client.chat.completions.create(
             model=MODEL_NAME,
-            max_length=int(max_len),
-            min_length=int(min_len),
+            messages=messages,
+            max_tokens=int(max_len),
+            temperature=0.3,
         )
 
-        if hasattr(response, "summary_text"):
-            return response.summary_text.strip()
-        elif isinstance(response, dict) and "summary_text" in response:
-            return response["summary_text"].strip()
-        elif isinstance(response, str):
-            return response.strip()
+        if response and response.choices:
+            return response.choices[0].message.content.strip()
 
-        return str(response).strip()
+        return "Inference Error: Received empty response from model."
 
     except Exception as e:
         err_msg = str(e)
@@ -74,13 +81,12 @@ def generate_abstractive_summary(
 
 # --- Streamlit Layout ---
 st.set_page_config(
-    page_title="Text Summarization System", page_icon="📝", layout="wide"
+    page_title="Text Summarization System", page_icon="", layout="wide"
 )
 
-st.title("📝 Text Summarization System")
+st.title(" Text Summarization System")
 st.caption(
-    "Compare extractive baseline summaries against abstractive BART API"
-    " generation."
+    "Compare extractive baseline summaries against abstractive AI-generated summaries."
 )
 
 col1, col2 = st.columns(2)
@@ -121,7 +127,7 @@ with col2:
                 )
                 ext_count = len(extractive_res.split())
 
-                st.subheader("Abstractive BART Summary")
+                st.subheader("Abstractive AI Summary")
                 if abstractive_res.startswith("API") or abstractive_res.startswith(
                     "Inference Error"
                 ):
