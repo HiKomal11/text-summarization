@@ -1,0 +1,6 @@
+torch
+transformers
+nltk
+evaluate
+pandas
+gradio
