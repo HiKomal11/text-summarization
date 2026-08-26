@@ -104,10 +104,10 @@ def generate_abstractive_summary(
 
 # --- Streamlit Layout ---
 st.set_page_config(
-    page_title="Text Summarization System", page_icon="📝", layout="wide"
+    page_title="Text Summarization System", page_icon="", layout="wide"
 )
 
-st.title("📝 Text Summarization System")
+st.title(" Text Summarization System")
 st.caption(
     "Compare extractive baseline summaries against abstractive DistilBART API"
     " generation."
