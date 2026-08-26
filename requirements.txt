@@ -1,2 +1,6 @@
 streamlit
 nltk
+rich
+pygments
+huggingface_hub
+rouge-score
