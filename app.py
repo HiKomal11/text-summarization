@@ -87,7 +87,7 @@ def summarize_user_text(user_text: str, max_words: int):
 
 
 with gr.Blocks(title="Text Summarization System") as demo:
-  gr.Markdown("# 📝 Abstractive & Extractive Text Summarizer")
+  gr.Markdown("#  Abstractive & Extractive Text Summarizer")
   gr.Markdown(
       "Paste text below to generate automated summaries using DistilBART and"
       " NLTK baselines."
