@@ -1,7 +1,7 @@
 import os
 import nltk
+import requests
 import streamlit as st
-from huggingface_hub import InferenceClient
 
 # Initialize tokenizer safely
 try:
@@ -10,6 +10,7 @@ except LookupError:
     nltk.download("punkt", quiet=True)
 
 MODEL_NAME = "sshleifer/distilbart-cnn-12-6"
+API_URL = f"https://api-inference.huggingface.co/models/{MODEL_NAME}"
 
 
 def clean_text(text: str) -> str:
@@ -39,35 +40,38 @@ def generate_abstractive_summary(
     if not hf_token:
         return "API Config Error: HF_TOKEN secret not found in Streamlit Cloud."
 
+    headers = {"Authorization": f"Bearer {hf_token.strip()}"}
+    payload = {
+        "inputs": cleaned_input,
+        "parameters": {
+            "max_length": int(max_len),
+            "min_length": int(min_len),
+        },
+    }
+
     try:
-        # Initialize the client with explicit token
-        client = InferenceClient(token=hf_token.strip())
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+        result = response.json()
 
-        # Passed as direct arguments instead of inside a `parameters` dictionary
-        summary = client.summarization(
-            cleaned_input,
-            model=MODEL_NAME,
-            max_length=int(max_len),
-            min_length=int(min_len),
-        )
-
-        if hasattr(summary, "summary_text"):
-            return summary.summary_text
-        elif isinstance(summary, dict) and "summary_text" in summary:
-            return summary["summary_text"]
-        elif isinstance(summary, str):
-            return summary
-
-        return str(summary)
-
-    except Exception as e:
-        err_msg = str(e)
-        if "403" in err_msg or "Forbidden" in err_msg:
+        if response.status_code == 200:
+            if isinstance(result, list) and len(result) > 0:
+                return result[0].get("summary_text", "")
+            elif isinstance(result, dict) and "summary_text" in result:
+                return result["summary_text"]
+            return str(result)
+        elif response.status_code == 403:
             return (
                 "API 403 (Forbidden): Ensure your Hugging Face fine-grained token has"
                 " 'Make calls to Inference Providers' permission enabled."
             )
-        return f"Inference Error: {err_msg}"
+        elif response.status_code == 503:
+            return "API Note: Model is currently loading on Hugging Face. Please try again in a few seconds."
+        else:
+            error_msg = result.get("error", str(result)) if isinstance(result, dict) else str(result)
+            return f"Inference Error ({response.status_code}): {error_msg}"
+
+    except Exception as e:
+        return f"Inference Error: {str(e)}"
 
 
 # --- Streamlit Layout ---
