@@ -1,4 +1,4 @@
-
+requests
 huggingface_hub
 gradio
 nltk
