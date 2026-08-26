@@ -1,16 +1,19 @@
+import json
 import os
 import time
+import urllib.error
+import urllib.request
 import gradio as gr
 import nltk
-import requests
 
 nltk.download("punkt", quiet=True)
 nltk.download("punkt_tab", quiet=True)
 
 MODEL_NAME = "sshleifer/distilbart-cnn-12-6"
-API_URL = f"https://api-inference.huggingface.co/models/{MODEL_NAME}"
-# Optionally pass your HF token: {"Authorization": f"Bearer {os.environ.get('HF_TOKEN')}"}
-HEADERS = {}
+# Active 2026 Hugging Face Serverless Router Endpoint
+API_URL = (
+    f"https://router.huggingface.co/hf-inference/models/{MODEL_NAME}"
+)
 
 
 def clean_text(text: str) -> str:
@@ -35,19 +38,34 @@ def generate_abstractive_summary(
       "parameters": {"max_length": int(max_len), "min_length": int(min_len)},
   }
 
+  headers = {"Content-Type": "application/json"}
+
+  # Add Bearer Token if configured in Render environment variables
+  hf_token = os.environ.get("HF_TOKEN")
+  if hf_token:
+    headers["Authorization"] = f"Bearer {hf_token}"
+
   try:
-    response = requests.post(API_URL, headers=HEADERS, json=payload, timeout=30)
-    data = response.json()
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(API_URL, data=data, headers=headers)
 
-    if isinstance(data, list) and len(data) > 0:
-      return data[0].get("summary_text", "")
-    elif isinstance(data, dict):
-      if "summary_text" in data:
-        return data["summary_text"]
-      if "error" in data:
-        return f"Inference API Error: {data['error']}"
+    with urllib.request.urlopen(req, timeout=30) as response:
+      res_body = response.read().decode("utf-8")
+      result = json.loads(res_body)
 
-    return str(data)
+      if isinstance(result, list) and len(result) > 0:
+        return result[0].get("summary_text", "")
+      elif isinstance(result, dict):
+        if "summary_text" in result:
+          return result["summary_text"]
+        if "error" in result:
+          return f"Inference API Error: {result['error']}"
+
+      return str(result)
+
+  except urllib.error.HTTPError as e:
+    error_body = e.read().decode("utf-8")
+    return f"HTTP Error {e.code}: {error_body}"
   except Exception as e:
     return f"Request Error: {str(e)}"
 
@@ -70,7 +88,10 @@ def summarize_user_text(user_text: str, max_words: int):
 
   orig_word_count = len(user_text.split())
   abs_word_count = len(abstractive_res.split())
-  stats = f"Original: {orig_word_count} words | Abstractive Summary: {abs_word_count} words"
+  stats = (
+      f"Original: {orig_word_count} words | Abstractive Summary:"
+      f" {abs_word_count} words"
+  )
 
   return extractive_res, abstractive_res, stats
 
