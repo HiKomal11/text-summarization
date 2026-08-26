@@ -1,22 +1,23 @@
 import nltk
 import streamlit as st
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
+import torch
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 # Download NLTK sentence tokenizers quietly
 nltk.download("punkt", quiet=True)
 nltk.download("punkt_tab", quiet=True)
 
 
-# Cache model and tokenizer initialization to save RAM and build time
+# Load model and tokenizer directly to avoid Python 3.14 pipeline task registry errors
 @st.cache_resource
-def load_summarization_pipeline():
+def load_model_and_tokenizer():
   model_name = "sshleifer/distilbart-cnn-12-6"
   tokenizer = AutoTokenizer.from_pretrained(model_name)
   model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
-  return pipeline("summarization", model=model, tokenizer=tokenizer)
+  return tokenizer, model
 
 
-summarizer = load_summarization_pipeline()
+tokenizer, model = load_model_and_tokenizer()
 
 
 def clean_text(text: str) -> str:
@@ -30,6 +31,34 @@ def generate_extractive_baseline(text: str, num_sentences: int = 2) -> str:
   if not sentences:
     return ""
   return " ".join(sentences[:num_sentences])
+
+
+def generate_abstractive_summary(
+    text: str, max_len: int = 120, min_len: int = 30
+) -> str:
+  cleaned_input = clean_text(text)
+
+  # Tokenize input text
+  inputs = tokenizer(
+      cleaned_input,
+      return_tensors="pt",
+      max_length=1024,
+      truncation=True,
+  )
+
+  # Generate summary sequence directly using model.generate()
+  with torch.no_grad():
+    summary_ids = model.generate(
+        inputs["input_ids"],
+        max_length=max_len,
+        min_length=min_len,
+        num_beams=4,
+        early_stopping=True,
+    )
+
+  # Decode model tokens back to text
+  summary_text = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+  return summary_text
 
 
 # Page Setup
@@ -57,19 +86,14 @@ with col2:
       with st.spinner("Generating summaries..."):
         max_len = int(max_words)
         min_len = max(10, int(max_len * 0.3))
-        cleaned_input = clean_text(user_text)
 
         # Extractive Baseline Summary
         extractive_res = generate_extractive_baseline(user_text)
 
-        # Abstractive BART Summary
-        abs_res = summarizer(
-            cleaned_input,
-            max_length=max_len,
-            min_length=min_len,
-            do_sample=False,
+        # Abstractive BART Summary via Direct PyTorch Generation
+        abstractive_res = generate_abstractive_summary(
+            user_text, max_len=max_len, min_len=min_len
         )
-        abstractive_res = abs_res[0]["summary_text"]
 
         # Word Count Metrics
         orig_count = len(user_text.split())
