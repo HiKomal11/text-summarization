@@ -9,8 +9,8 @@ try:
 except LookupError:
     nltk.download("punkt", quiet=True)
 
-# Using a modern, reliably supported serverless chat model via Hugging Face router
-MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
+# Universally enabled chat model on the modern router tier
+MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 
 
 def clean_text(text: str) -> str:
@@ -43,7 +43,6 @@ def generate_abstractive_summary(
     try:
         client = InferenceClient(token=hf_token.strip())
 
-        # Use chat completion which is fully supported and stable on the new router backend
         messages = [
             {
                 "role": "system",
